@@ -1,10 +1,12 @@
 #!/usr/bin/env python
 # coding: utf-8
 # author: stefan 2022-02-28
+import os.path
 
+import numpy as np
 import pandas as pd
 import tensorflow as tf
-from tensorflow.keras.layers import *
+from keras.layers import *
 
 """自定义工具层
 embedding, crossDot, crossMulti, one-hot, dice ,etc
@@ -36,26 +38,56 @@ class HashBucketsEmbedding(Layer):
         out = self.embedding_layer(emb_input)
         return out
 
+    def get_config(self):
+        config = super().get_config()
+        config.update({
+            "num_buckets": self.num_buckets,
+            "emb_size": self.emb_size,
+        })
+        return config
+
 
 # tensorflow 内置字典查询
 class VocabLayer(Layer):
-    def __init__(self, vocab_path, vocab_name, **kwargs):
+    def __init__(self, vocab_path, vocab_name, in_type=tf.int64, out_type=tf.int64, sep='\t', **kwargs):
         super(VocabLayer, self).__init__(**kwargs)
         self.vocab_path = vocab_path
         self.vocab_name = vocab_name
+        self.in_type = in_type
+        self.out_type = out_type
+        self.sep = sep
 
     def build(self, input_shape):
         super(VocabLayer, self).build(input_shape)
-        self.vocab = pd.read_csv(self.vocab_path, names=['key', 'value'], sep='\t', header=None)
-        self.vocab['key'] = self.vocab['key'].apply(lambda x: int(x))
+        if os.path.isdir(self.vocab_path):
+            tmp = []
+            for fp in os.listdir(self.vocab_path):
+                f = pd.read_csv(os.path.join(self.vocab_path, fp), sep=self.sep, names=['key', 'value'])
+                tmp.append(f)
+            self.vocab = pd.concat(tmp, axis=0, ignore_index=True)
+        else:
+            self.vocab = pd.read_csv(self.vocab_path, names=['key', 'value'], sep=self.sep, header=None)
+
+        # self.vocab['key'] = self.vocab['key'].apply(lambda x: int(x))
         self.table = tf.lookup.StaticHashTable(initializer=tf.lookup.KeyValueTensorInitializer(
-            keys=tf.constant(self.vocab['key'].values, dtype=tf.int64),
-            values=tf.constant(self.vocab['value'].values, dtype=tf.int64), ),
-            default_value=tf.constant(0, dtype=tf.int64), name=self.vocab_name)
+            keys=tf.constant(self.vocab['key'].values, dtype=self.in_type),
+            values=tf.constant(self.vocab['value'].values, dtype=self.out_type), ),
+            default_value=tf.constant(0, dtype=self.out_type), name=self.vocab_name)
 
     def call(self, input):
         token_ids = self.table.lookup(input)
         return token_ids
+
+    def get_config(self):
+        config = super().get_config()
+        config.update({
+            "vocab_path": self.vocab_path,
+            "vocab_name": self.vocab_name,
+            "in_type": self.in_type,
+            "out_type": self.out_type,
+            "sep": self.sep,
+        })
+        return config
 
 
 class L2_norm_layer(Layer):
@@ -64,7 +96,7 @@ class L2_norm_layer(Layer):
         self.axis = axis
 
     def call(self, inputs):
-        return tf.nn.l2_normalize(inputs)
+        return tf.nn.l2_normalize(inputs, axis=self.axis)
 
 
 class Power_layer(Layer):
@@ -80,17 +112,25 @@ class CrossDotLayer(Layer):
     def __init__(self, axes, **kwargs):
         super(CrossDotLayer, self).__init__(**kwargs)
         self.axes = axes
+        self.supports_masking = True
 
-    def call(self, emb1, emb2):
+    def call(self, emb1, emb2, mask=None):
         return Dot(self.axes)([emb1, emb2])
+
+    def compute_mask(self, inputs, mask=None):
+        return None   # mask 到该层结束，不向下传递
 
 
 class CrossMultiplyLayer(Layer):
     def __init__(self, **kwargs):
         super(CrossMultiplyLayer, self).__init__(**kwargs)
+        self.supports_masking = True
 
-    def call(self, emb1, emb2):
+    def call(self, emb1, emb2, mask=None):
         return Multiply()([emb1, emb2])
+
+    def compute_mask(self, inputs, mask=None):
+        return None
 
 
 class OneHotEncodingLayer(Layer):
@@ -113,3 +153,24 @@ class Dice(Layer):
         x_p = tf.sigmoid(x_normed)
 
         return self.alpha * (1.0 - x_p) * x + x_p * x
+
+
+class MySoftmax(Layer):
+    def __init__(self):
+        super(MySoftmax, self).__init__()
+
+    def call(self, inputs):
+        pos_out = inputs['pos']
+        neg1_out = inputs['neg1']
+        neg2_out = inputs['neg2']
+        neg3_out = inputs['neg3']
+        neg4_out = inputs['neg4']
+        neg5_out = inputs['neg5']
+        sum_e_xj = tf.exp(pos_out) + tf.exp(neg1_out) + tf.exp(neg2_out) + tf.exp(neg3_out) + tf.exp(neg4_out) + tf.exp(neg5_out)
+        return concatenate([tf.exp(pos_out) / sum_e_xj,
+                            tf.exp(neg1_out) / sum_e_xj,
+                            tf.exp(neg2_out) / sum_e_xj,
+                            tf.exp(neg3_out) / sum_e_xj,
+                            tf.exp(neg4_out) / sum_e_xj,
+                            tf.exp(neg5_out) / sum_e_xj,
+                            ], axis=-1, name='softmax_pred')
