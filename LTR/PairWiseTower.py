@@ -101,3 +101,17 @@ def build_ltr_tower(temperature, city_dict, shangquan_dict, comm_dict, price_dic
     all_model.summary()
 
     return all_model, user_model, item_model
+  
+  
+def myLtrAcc(y_true, y_pred):
+    # pos的概率为最大则满足预期
+    pred_max_index = tf.equal(tf.argmax(y_pred, axis=-1), 0) 
+    correct_count = tf.reduce_sum(tf.cast(pred_max_index, tf.float32))
+    return correct_count / tf.cast(len(pred_max_index), 'float32')
+  
+  
+def softmaxloss(y_true, y_pred):
+    pos_pred = tf.cast(tf.slice(y_pred, [0, 0], [-1, 1]), 'float32')
+    return K.mean(-tf.math.log(pos_pred))  
+  
+  
