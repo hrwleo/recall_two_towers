@@ -6,7 +6,7 @@ import tensorflow as tf
 import datetime
 
 """
-909-recall
+recall
 模型相关参数配置
 """
 
